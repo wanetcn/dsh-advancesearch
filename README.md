@@ -2,6 +2,8 @@
 
 DeepSeek Harness 插件:按关键字搜索**所有会话**的名称与会话内容,并在 Web 工作区界面提供搜索按钮。
 
+不只搜 DSH 自己的会话——勾选后可以同时搜索本机 **Claude Code、Codex、ZCode** 等 coding agent 的历史会话(标题 + 内容),还内置 MCP 服务器,让 agent 自己也能检索这些历史记录。
+
 - **Host 侧**(`index.js`):通过 DSH 官方 `sessionQuery` 服务(`dsh-session-query-sqlite` 全文索引)暴露已认证的搜索路由 `GET /api/dsh-advancesearch`,与 `dsh-host-open-in-app` 使用同一 `connection.requestRejection` 信任围栏。
 - **外部 Agent 会话搜索**:勾选 Claude / Codex / ZCode 后,同时扫描本机 `~/.claude/projects`、`~/.codex/sessions`、`~/.zcode/cli/db` 的会话日志(标题 + 内容),勾选状态持久化保留;
 - **Client 侧**(`client.js`):以官方 `dsh.client` 浏览器插件格式(`window.__ModuleLoader__`)加载,在侧边栏底部(`sidebar.footer.action` 槽位)注册一个 🔍 按钮,点击弹出全局搜索层(`shell.overlay` 槽位):输入关键字 → 回车 → 列出所有命中会话(标题 + 最佳片段,关键字高亮)→ 点击某会话展开该会话内的逐条命中。
@@ -30,6 +32,52 @@ MCP 服务器路径通过 `!!js` 相对插件根动态解析,无需写死路径;
 `DSH_DESKTOP_NODE_EXECUTABLE` 环境变量,否则回落到 `node`。
 
 不装插件、只想在 Claude Desktop 等其他 MCP 客户端里用?见 [mcp/README.md](mcp/README.md) 的独立接入配置。
+
+### 会话内调用示例
+
+装好重启后,直接用自然语言说话,agent 会自己调用工具。几个典型场景:
+
+**① 翻历史:「我之前让 codex 配置过某个服务,翻出来看看」**
+
+```text
+你: 我记得在 codex 里配置过某个服务,帮我找出来看看当时怎么配的
+
+agent: (调用 search_agent_sessions,query="服务配置", agents=["codex"])
+agent: (调用 read_agent_session,读取最相关会话的消息原文)
+agent: 找到了 9 月 14 日的会话「XX 服务的配置文件调整」,当时的方案是:
+       入站监听本地端口,证书放到指定目录…
+       参考当时的配置,这次建议这样写:…
+```
+
+**② 跨 agent 找方案:「所有 agent 里谁讨论过这个系统」**
+
+```text
+你: 搜一下所有 agent 里关于这个项目的讨论,把最相关那个会话的原文读给我
+
+agent: (search_agent_sessions,query="项目部署",agents=["claude","codex","zcode"])
+agent: 共 12 条命中:
+       [Codex]  巡检任务执行记录     — 9月28日
+       [ZCode]  每日报表汇总生成     — 定时任务
+       [Claude] 代码目录迁移调整
+       最相关的是 Codex 的「查询服务器地址端口」,原文如下:…
+```
+
+**③ 变成 agent 的记忆:接续半个月前的任务**
+
+```text
+你: 上个月我让 zcode 改过某个驱动的下载地址,改成什么了?
+
+agent: (search_agent_sessions → read_agent_session)
+agent: 8 月 21 日的会话「更新某驱动的下载地址」里,旧地址已替换为新地址,
+       并同步更新了部署脚本中的引用,…
+```
+
+**④ 操作类:「打开 zcode」/「在访达里显示那条记录」**
+
+调用 `open_agent_app` / `reveal_agent_session`,直接唤起应用或定位记录文件。
+
+> 💡 工具名带 `mcp__agent-session-search__` 前缀;在轨迹页可以看到每次调用的参数与结果。
+> 搜索语义:字面、大小写不敏感、空白灵活匹配(如 `web app` 能命中 `WebApp` 这种连写形式)。
 
 ## 安装
 
