@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 export const SNIPPET_CHARS = 160
-export const AGENT_IDS = ['claude', 'codex', 'zcode']
+export const AGENT_IDS = ['claude', 'codex', 'zcode', 'gemini']
 
 /** 大小写不敏感、空白灵活的字面匹配(与官方 compileSessionTextFilter 语义一致)。 */
 function makeTextMatcher(query) {
@@ -72,7 +72,7 @@ function* textsOf(value) {
 
 function firstUserText(lines) {
   for (const line of lines) {
-    const role = line?.message?.role ?? line?.payload?.role
+    const role = line?.message?.role ?? line?.payload?.role ?? (line?.type === 'user' ? 'user' : undefined)
     if (role !== 'user') continue
     for (const text of textsOf(line.message?.content ?? line.payload?.content ?? line.payload)) {
       const clean = text.replace(/\s+/gu, ' ').trim()
@@ -332,6 +332,7 @@ const AGENT_BUNDLE_IDS = {
   claude: 'com.anthropic.claudefordesktop',
   codex: 'com.openai.codex',
   zcode: 'dev.zcode.app',
+  gemini: 'com.google.Gemini',
 }
 
 /** 允许「访达中显示」的路径前缀(只读揭示,不含写入)。 */
@@ -342,6 +343,7 @@ const REVEAL_ALLOWED_ROOTS = [
   join(homedir(), '.codex', 'archived_sessions'),
   join(homedir(), '.codex', 'sqlite'),
   join(homedir(), '.zcode', 'cli'),
+  join(homedir(), '.gemini'),
 ]
 
 /** 在访达中显示文件/目录;execFile 无 shell,无注入面。 */
@@ -365,5 +367,34 @@ function openAgentApp(agent) {
 }
 
 
-const AGENT_SCANNERS = { claude: scanClaude, codex: scanCodex, zcode: scanZcode }
-export { makeTextMatcher, snippetAround, scanClaude, scanCodex, scanZcode, AGENT_BUNDLE_IDS, AGENT_SCANNERS, revealInFinder, openAgentApp, REVEAL_ALLOWED_ROOTS }
+/** Gemini CLI:~/.gemini/tmp/<hash>/chats/session-*.jsonl,消息行 {type:'user'|'gemini', content}。 */
+async function scanGemini(query, matcher, limit) {
+  const root = join(homedir(), '.gemini', 'tmp')
+  const files = await newestFirst(await jsonlFilesUnder(root))
+  const hits = []
+  for (const path of files) {
+    if (hits.length >= limit) break
+    try {
+      const lines = jsonLinesOf(await readFile(path, 'utf8'))
+      const header = lines.find((line) => line?.sessionId)
+      const contentLines = lines.filter((line) => line?.type === 'user' || line?.type === 'gemini')
+      const matches = collectMatches(contentLines, matcher)
+      const title = firstUserText(contentLines) ??
+        (header ? `Gemini 会话 ${String(header.startTime ?? '').slice(0, 10)}` : null) ??
+        path.split('/').pop()
+      if (matches.length === 0) continue
+      hits.push({
+        agent: 'gemini',
+        id: header?.sessionId ?? path.split('/').pop().replace(/\.jsonl$/, ''),
+        title,
+        time: header?.lastUpdated ? Date.parse(header.lastUpdated) || 0 : (await stat(path)).mtimeMs,
+        path,
+        matches,
+      })
+    } catch {}
+  }
+  return hits
+}
+
+const AGENT_SCANNERS = { claude: scanClaude, codex: scanCodex, zcode: scanZcode, gemini: scanGemini }
+export { makeTextMatcher, snippetAround, scanClaude, scanCodex, scanZcode, scanGemini, AGENT_BUNDLE_IDS, AGENT_SCANNERS, revealInFinder, openAgentApp, REVEAL_ALLOWED_ROOTS }

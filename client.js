@@ -33,6 +33,7 @@ window.__ModuleLoader__.load({
 			{ id: "claude", label: "Claude" },
 			{ id: "codex", label: "Codex" },
 			{ id: "zcode", label: "ZCode" },
+			{ id: "gemini", label: "Gemini" },
 		];
 		const AGENTS_STORE_KEY = "advancesearch.agents";
 		function loadSelectedAgents() {
@@ -280,6 +281,7 @@ window.__ModuleLoader__.load({
 			claude: "#d97757",
 			codex: "#10a37f",
 			zcode: "#4f6ef7",
+			gemini: "#1a73e8",
 		};
 		function AgentBadge(props) {
 			const { agent } = props;

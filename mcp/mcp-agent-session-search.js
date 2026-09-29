@@ -19,6 +19,7 @@ import {
   scanClaude,
   scanCodex,
   scanZcode,
+  scanGemini,
   revealInFinder,
   openAgentApp,
 } from './lib/scanners.js'
@@ -115,6 +116,7 @@ function resolveTarget(agent, id, path) {
   if (agent === 'zcode') return { sessionId: id }
   if (agent === 'claude') return { path: path ?? findFileUnder(join(homedir(), '.claude', 'projects'), id) }
   if (agent === 'codex') return { path: path ?? findFileUnder(join(homedir(), '.codex', 'sessions'), id) }
+  if (agent === 'gemini') return { path: path ?? findFileUnder(join(homedir(), '.gemini', 'tmp'), id) }
   throw new Error(`未知 agent: ${agent}`)
 }
 
@@ -198,7 +200,7 @@ async function toolSearch({ query, agents, limit = 10 }) {
   const wanted = (Array.isArray(agents) && agents.length > 0 ? agents : AGENT_IDS).filter((agent) =>
     AGENT_IDS.includes(agent),
   )
-  const scanners = { claude: scanClaude, codex: scanCodex, zcode: scanZcode }
+  const scanners = { claude: scanClaude, codex: scanCodex, zcode: scanZcode, gemini: scanGemini }
   const lines = []
   for (const agent of wanted) {
     const hits = await scanners[agent](trimmed, matcher, Math.min(limit, 50))
@@ -215,6 +217,24 @@ async function toolSearch({ query, agents, limit = 10 }) {
   return { content: [{ type: 'text', text: lines.join('\n') || '无结果' }] }
 }
 
+function readGeminiSession(path, limit) {
+  const out = []
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    let parsed
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const type = parsed?.type
+    if ((type === 'user' || type === 'gemini') && typeof parsed?.content === 'string' && parsed.content.trim()) {
+      out.push({ role: type === 'user' ? 'user' : 'assistant', text: parsed.content.trim() })
+    }
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 async function toolRead({ agent, id, path, limit = 50 }) {
   if (!AGENT_IDS.includes(agent)) throw new Error(`未知 agent: ${agent}`)
   const target = resolveTarget(agent, id, path)
@@ -223,7 +243,9 @@ async function toolRead({ agent, id, path, limit = 50 }) {
       ? readZcodeSession(target.sessionId, limit)
       : agent === 'claude'
         ? await readClaudeSession(target.path, limit)
-        : await readCodexSession(target.path, limit)
+        : agent === 'gemini'
+          ? readGeminiSession(target.path, limit)
+          : await readCodexSession(target.path, limit)
   const text =
     messages.map((message) => `[${message.role}] ${message.text}`).join('\n\n') || '(该会话没有可读文本消息)'
   return { content: [{ type: 'text', text }] }
