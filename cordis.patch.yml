@@ -11,4 +11,4 @@
         transport: stdio
         command: !!js process.env.DSH_DESKTOP_NODE_EXECUTABLE || 'node'
         args:
-          - !!js decodeURIComponent(new URL('mcp/mcp-agent-session-search.js', ctx.baseUrl).pathname)
+          - !!js (function(){var p=[];try{var I=ctx.loader&&ctx.loader.internal;if(I){var r=I.version==='v2'?I.resolveSync(ctx.baseUrl,{specifier:'dsh-advancesearch/package.json',attributes:{}}):I.resolveSync('dsh-advancesearch/package.json',ctx.baseUrl,{});if(r&&r.url)p.push(r.url)}}catch(e){}p.push(ctx.baseUrl);p.push(new URL('node_modules/dsh-advancesearch/package.json',ctx.baseUrl).href);for(var i=0;i<p.length;i++){try{return decodeURIComponent(new URL('mcp/mcp-agent-session-search.js',p[i]).pathname)}catch(e){}}return 'mcp/mcp-agent-session-search.js'})()
