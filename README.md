@@ -2,7 +2,7 @@
 
 DeepSeek Harness 插件:按关键字搜索**所有会话**的名称与会话内容,并在 Web 工作区界面提供搜索按钮。
 
-不只搜 DSH 自己的会话——勾选后可以同时搜索本机 **Claude Code、Codex、ZCode** 等 coding agent 的历史会话(标题 + 内容),还内置 MCP 服务器,让 agent 自己也能检索这些历史记录。
+不只搜 DSH 自己的会话——勾选后可以同时搜索本机 **Claude Code、Codex、ZCode、Gemini CLI** 等 coding agent 的历史会话(标题 + 内容),还内置 MCP 服务器,让 agent 自己也能检索这些历史记录。
 
 - **Host 侧**(`index.js`):通过 DSH 官方 `sessionQuery` 服务(`dsh-session-query-sqlite` 全文索引)暴露已认证的搜索路由 `GET /api/dsh-advancesearch`,与 `dsh-host-open-in-app` 使用同一 `connection.requestRejection` 信任围栏。
 - **外部 Agent 会话搜索**:勾选 Claude / Codex / ZCode 后,同时扫描本机 `~/.claude/projects`、`~/.codex/sessions`、`~/.zcode/cli/db` 的会话日志(标题 + 内容),勾选状态持久化保留;

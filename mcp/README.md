@@ -16,6 +16,10 @@
 - Claude Code:`~/.claude/projects/**/*.jsonl`
 - Codex:`~/.codex/sessions/**/rollout-*.jsonl`(标题来自 `codex-dev.db` / `state_5.sqlite` 线程索引)
 - ZCode:`~/.zcode/cli/db/db.sqlite`(session/part 表)
+- Gemini CLI:`~/.gemini/tmp/*/chats/session-*.jsonl`
+
+> ⚠️ Gemini **GUI 版**(Gemini.app)的会话是加密存储(`ZENCRYPTEDPROTOBYTES`,密钥在 Keychain/Google 侧),
+> 本地无明文可索引,故仅覆盖 Gemini CLI;可对其执行 open-app 唤起。
 
 要求:macOS,Node ≥ 22.5(使用内置 `node:sqlite`)。
 

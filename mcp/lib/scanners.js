@@ -332,7 +332,7 @@ const AGENT_BUNDLE_IDS = {
   claude: 'com.anthropic.claudefordesktop',
   codex: 'com.openai.codex',
   zcode: 'dev.zcode.app',
-  gemini: 'com.google.Gemini',
+  gemini: 'com.google.GeminiMacOS',
 }
 
 /** 允许「访达中显示」的路径前缀(只读揭示,不含写入)。 */
