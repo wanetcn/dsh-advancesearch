@@ -82,7 +82,8 @@ function snippetAround(text, matcher, chars = SNIPPET_CHARS) {
   const clean = String(text ?? '').replace(/\s+/gu, ' ').trim()
   if (!clean) return null
   const match = matcher.exec(clean)
-  if (!match || clean.length <= chars) return clean || null
+  if (!match) return null
+  if (clean.length <= chars) return clean
   const start = Math.max(0, match.index - Math.floor((chars - (match[0].length || 1)) / 2))
   const prefix = start > 0 ? '…' : ''
   const end = Math.min(clean.length, start + chars)
@@ -110,7 +111,7 @@ function jsonLinesOf(text) {
   return out
 }
 
-/** 从任意 JSON 值里收集文本片段(仅取已知文本字段,避免把 JSON 语法字符当内容)。 */
+/** 深度遍历 JSON 值,产出其中的文本字符串(跳过 type/id/role 等枚举字段)。 */
 function* textsOf(value) {
   if (typeof value === 'string') {
     yield value
@@ -121,11 +122,10 @@ function* textsOf(value) {
     return
   }
   if (value !== null && typeof value === 'object') {
-    if (typeof value.text === 'string') yield value.text
-    if (typeof value.message === 'string') yield value.message
-    if (typeof value.summary === 'string') yield value.summary
-    if (typeof value.thinking === 'string') yield value.thinking
-    if (value.content !== undefined) yield* textsOf(value.content)
+    for (const [key, item] of Object.entries(value)) {
+      if (key === 'type' || key === 'id' || key === 'role') continue
+      yield* textsOf(item)
+    }
   }
 }
 
@@ -224,26 +224,93 @@ async function scanClaude(query, matcher, limit) {
 
 async function scanCodex(query, matcher, limit) {
   const root = join(homedir(), '.codex', 'sessions')
+  const { byThreadId, byRolloutPath } = codexThreadIndexes()
   const files = await newestFirst(await jsonlFilesUnder(root))
   const hits = []
   for (const path of files) {
     if (hits.length >= limit) break
     try {
       const lines = jsonLinesOf(await readFile(path, 'utf8'))
-      const matches = collectMatches(lines, matcher)
-      if (matches.length === 0) continue
+      // developer 角色是注入的指令(AGENTS.md / 权限说明),不参与匹配
+      const contentLines = lines.filter(
+        (line) => (line?.payload?.role ?? line?.message?.role) !== 'developer',
+      )
+      const matches = collectMatches(contentLines, matcher)
+      const indexed =
+        byRolloutPath.get(path) ?? byThreadId.get(threadIdOfRolloutPath(path) ?? '') ?? null
+      if (matches.length === 0) {
+        // 内容未命中时,标题命中也可入选
+        const title = indexed?.title ?? firstUserText(lines)
+        if (indexed && typeof title === 'string' && matcher.test(title)) {
+          hits.push({
+            agent: 'codex',
+            id: indexed.id,
+            title,
+            time: indexed.updated_at,
+            path,
+            matches: [],
+            titleMatch: true,
+          })
+        }
+        continue
+      }
       const meta = lines.find((line) => line?.type === 'session_meta')?.payload
+      const fallbackTitle = firstUserText(lines) ?? meta?.cwd?.split('/').pop() ?? path.split('/').pop()
       hits.push({
         agent: 'codex',
-        id: meta?.id ?? path.split('/').pop().replace(/\.jsonl$/, '').replace(/^rollout-[^-]+-/, ''),
-        title: firstUserText(lines) ?? meta?.cwd?.split('/').pop() ?? path.split('/').pop(),
-        time: (await stat(path)).mtimeMs,
+        id: indexed?.id ?? meta?.id ?? path.split('/').pop().replace(/\.jsonl$/, '').replace(/^rollout-[^-]+-/, ''),
+        title: indexed?.title ?? fallbackTitle,
+        time: indexed?.updated_at ?? (await stat(path)).mtimeMs,
         path,
         matches,
       })
     } catch {}
   }
   return hits
+}
+
+/** Codex 桌面版的线程索引:合并 codex-dev 目录表(CLI 版)与 state_5 threads 表,键分别为线程 id 与 rollout 路径。 */
+function codexThreadIndexes() {
+  const byThreadId = new Map()
+  const byRolloutPath = new Map()
+  try {
+    const catalog = new DatabaseSync(join(homedir(), '.codex', 'sqlite', 'codex-dev.db'), { readOnly: true })
+    try {
+      const rows = catalog
+        .prepare('SELECT thread_id, display_title, source_updated_at FROM local_thread_catalog')
+        .all()
+      for (const row of rows) {
+        byThreadId.set(row.thread_id, {
+          id: row.thread_id,
+          title: row.display_title,
+          time: Math.round(row.source_updated_at * 1000),
+        })
+      }
+    } finally {
+      catalog.close()
+    }
+  } catch {}
+  try {
+    const state = new DatabaseSync(join(homedir(), '.codex', 'sqlite', 'state_5.sqlite'), { readOnly: true })
+    try {
+      const rows = state.prepare('SELECT id, title, rollout_path, updated_at FROM threads').all()
+      for (const row of rows) {
+        if (row.rollout_path) {
+          byRolloutPath.set(row.rollout_path, { id: row.id, title: row.title, time: row.updated_at })
+          if (!byThreadId.has(row.id)) byThreadId.set(row.id, { id: row.id, title: row.title, time: row.updated_at })
+        }
+      }
+    } finally {
+      state.close()
+    }
+  } catch {}
+  return { byThreadId, byRolloutPath }
+}
+
+/** rollout 文件名末尾即线程 uuid:rollout-<时间戳>-<uuid>.jsonl。 */
+function threadIdOfRolloutPath(path) {
+  const match = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(path)
+  return match ? match[1] : null
 }
 
 function zcodeDb() {
