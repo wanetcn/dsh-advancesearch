@@ -43,6 +43,19 @@ window.__ModuleLoader__.load({
 				return [];
 			}
 		}
+		async function runAgentAction(action, payload) {
+			const response = await fetch("/api/dsh-advancesearch/action", {
+				method: "POST",
+				credentials: "same-origin",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ action, ...payload }),
+			});
+			const body = await response.json().catch(() => null);
+			if (!response.ok || !body || body.ok !== true) {
+				throw new Error(body && body.error ? body.error.message : `操作失败(HTTP ${response.status})`);
+			}
+		}
+
 		function saveSelectedAgents(ids) {
 			try {
 				window.localStorage.setItem(AGENTS_STORE_KEY, JSON.stringify(ids));
@@ -286,12 +299,60 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		/** 外部 agent 会话命中行:标题 + 片段(可能多条)+ 来源路径;不可跳转,仅展示。 */
+		/** 外部 agent 会话命中行:标题 + 片段(可能多条)+ 来源路径;右键菜单可唤起 agent / 访达显示记录。 */
 		function ExternalHit(props) {
-			const { item, query } = props;
+			const { item, query, onMenu, onNotify } = props;
+			const menuFor = (x, y) => ({
+				x,
+				y,
+				items: [
+					{
+						label: `打开 ${(AGENT_OPTIONS.find((option) => option.id === item.agent) ?? { label: item.agent }).label} 应用`,
+						run: async () => {
+							try {
+								await runAgentAction("open-app", { agent: item.agent });
+							} catch (cause) {
+								onNotify(cause instanceof Error ? cause.message : String(cause));
+							}
+						},
+					},
+					...(item.path
+						? [
+							{
+								label: "在访达中显示记录文件",
+								run: async () => {
+									try {
+										await runAgentAction("reveal", { path: item.path });
+									} catch (cause) {
+										onNotify(cause instanceof Error ? cause.message : String(cause));
+									}
+								},
+							},
+						]
+						: []),
+					{
+						label: "复制会话 ID",
+						run: async () => {
+							try {
+								await navigator.clipboard.writeText(item.id ?? "");
+								onNotify("已复制会话 ID");
+							} catch {
+								onNotify("复制失败");
+							}
+						},
+					},
+				],
+			});
 			return e(
 				"div",
-				{ style: { borderBottom: "1px solid rgba(127,127,127,0.18)", padding: "10px 4px" } },
+				{
+					onContextMenu: (ev) => {
+						if (typeof onMenu !== "function") return;
+						ev.preventDefault();
+						onMenu(menuFor(ev.clientX, ev.clientY));
+					},
+					style: { borderBottom: "1px solid rgba(127,127,127,0.18)", padding: "10px 4px" },
+				},
 				e(
 					"div",
 					{ style: { display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" } },
@@ -299,7 +360,15 @@ window.__ModuleLoader__.load({
 						"span",
 						{ style: { display: "flex", gap: 6, alignItems: "center", minWidth: 0 } },
 						e(AgentBadge, { agent: item.agent }),
-						e("span", { style: { fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, item.title || "(无标题会话)"),
+						e("span", {
+							title: "点击打开该 Agent 应用;右键更多操作",
+							onClick: () => {
+								if (typeof onMenu !== "function") return;
+								const menu = menuFor(0, 0);
+								menu.items[0].run();
+							},
+							style: { fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" },
+						}, item.title || "(无标题会话)"),
 					),
 					e("span", { style: { fontSize: 11, opacity: 0.55, whiteSpace: "nowrap" } }, formatTime(item.time)),
 				),
@@ -329,16 +398,20 @@ window.__ModuleLoader__.load({
 					window.removeEventListener("resize", close);
 				};
 			}, [onClose]);
+			const items =
+				Array.isArray(menu.items) && menu.items.length > 0
+					? menu.items
+					: [{ label: "跳转到该会话", run: () => typeof onJump === "function" && onJump(menu.item.id) }];
 			return e(
 				"div",
 				{
 					onClick: (ev) => ev.stopPropagation(),
 					style: {
 						position: "fixed",
-						left: Math.min(menu.x, window.innerWidth - 190),
-						top: Math.min(menu.y, window.innerHeight - 60),
+						left: Math.min(menu.x, window.innerWidth - 210),
+						top: Math.min(menu.y, window.innerHeight - 40 * items.length - 12),
 						zIndex: 10001,
-						minWidth: 160,
+						minWidth: 190,
 						padding: 4,
 						borderRadius: 8,
 						border: "1px solid color-mix(in srgb, CanvasText 22%, transparent)",
@@ -347,27 +420,30 @@ window.__ModuleLoader__.load({
 						boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
 					},
 				},
-				e(
-					"button",
-					{
-						onClick: () => {
-							onClose();
-							if (typeof onJump === "function") onJump(menu.item.id);
+				items.map((item, index) =>
+					e(
+						"button",
+						{
+							key: index,
+							onClick: () => {
+								onClose();
+								Promise.resolve(item.run()).catch((cause) => console.error("[advancesearch]", cause));
+							},
+							style: {
+								display: "block",
+								width: "100%",
+								textAlign: "left",
+								fontSize: 13,
+								padding: "7px 10px",
+								border: "none",
+								borderRadius: 6,
+								background: "transparent",
+								color: "inherit",
+								cursor: "pointer",
+							},
 						},
-						style: {
-							display: "block",
-							width: "100%",
-							textAlign: "left",
-							fontSize: 13,
-							padding: "7px 10px",
-							border: "none",
-							borderRadius: 6,
-							background: "transparent",
-							color: "inherit",
-							cursor: "pointer",
-						},
-					},
-					"跳转到该会话",
+						item.label,
+					),
 				),
 			);
 		}
@@ -378,6 +454,11 @@ window.__ModuleLoader__.load({
 			const open = react.useSyncExternalStore(subscribeOpen, () => openState.open);
 			const [menu, setMenu] = react.useState(null);
 			const [selectedAgents, setSelectedAgents] = react.useState(loadSelectedAgents);
+			const [notice, setNotice] = react.useState(null);
+			const notify = (message) => {
+				setNotice(message);
+				window.setTimeout(() => setNotice(null), 2500);
+			};
 			react.useEffect(() => {
 				if (open) setSelectedAgents(loadSelectedAgents());
 			}, [open]);
@@ -548,6 +629,13 @@ window.__ModuleLoader__.load({
 							),
 						),
 					),
+					notice !== null
+						? e(
+							"div",
+							{ style: { fontSize: 12, padding: "6px 14px", opacity: 0.75, borderBottom: "1px solid rgba(127,127,127,0.12)" } },
+							notice,
+						)
+						: null,
 					e(
 						"div",
 						{ style: { overflowY: "auto", padding: "4px 12px 12px", flex: 1 } },
@@ -574,7 +662,13 @@ window.__ModuleLoader__.load({
 											`共 ${sessions.length} 个 DSH 会话` + ((result.external ?? []).length > 0 ? `、${result.external.length} 个外部 Agent 会话命中「${result.query}」` : `命中「${result.query}」`),
 										),
 										(result.external ?? []).map((item) =>
-											e(ExternalHit, { key: item.agent + ":" + item.id, item, query: result.query }),
+											e(ExternalHit, {
+												key: item.agent + ":" + item.id,
+												item,
+												query: result.query,
+												onMenu: setMenu,
+												onNotify: notify,
+											}),
 										),
 										sessions.map((item) =>
 											e(SessionHits, {

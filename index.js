@@ -23,6 +23,7 @@ import { homedir } from 'node:os'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { execFile } from 'node:child_process'
 
 export const name = 'dsh-advancesearch'
 export const inject = ['webServer', 'connection', 'sessionQuery']
@@ -384,6 +385,47 @@ async function scanZcode(query, matcher, limit) {
 // 供测试与复用导出
 export { makeTextMatcher, scanClaude, scanCodex, scanZcode }
 
+// ---------------------------------------------------------------------------
+// 外部 agent 动作(打开应用 / 访达显示记录):固定白名单,不执行任意命令
+// ---------------------------------------------------------------------------
+
+/** 各 agent 的 macOS 应用 bundle id(用于 open -b 唤起)。 */
+const AGENT_BUNDLE_IDS = {
+  claude: 'com.anthropic.claudefordesktop',
+  codex: 'com.openai.codex',
+  zcode: 'dev.zcode.app',
+}
+
+/** 允许「访达中显示」的路径前缀(只读揭示,不含写入)。 */
+const REVEAL_ALLOWED_ROOTS = [
+  join(homedir(), '.claude', 'projects'),
+  join(homedir(), '.claude', 'history.jsonl'),
+  join(homedir(), '.codex', 'sessions'),
+  join(homedir(), '.codex', 'archived_sessions'),
+  join(homedir(), '.codex', 'sqlite'),
+  join(homedir(), '.zcode', 'cli'),
+]
+
+/** 在访达中显示文件/目录;execFile 无 shell,无注入面。 */
+function revealInFinder(target) {
+  const resolved = String(target)
+  if (!resolved.startsWith('/') || !REVEAL_ALLOWED_ROOTS.some((root) => resolved.startsWith(root))) {
+    throw new Error('路径不在允许的会话记录目录内')
+  }
+  return new Promise((resolve, reject) => {
+    execFile('open', ['-R', resolved], (error) => (error ? reject(error) : resolve()))
+  })
+}
+
+/** 唤起对应 agent 桌面应用。 */
+function openAgentApp(agent) {
+  const bundleId = AGENT_BUNDLE_IDS[agent]
+  if (!bundleId) throw new Error(`未知 agent: ${agent}`)
+  return new Promise((resolve, reject) => {
+    execFile('open', ['-b', bundleId], (error) => (error ? reject(error) : resolve()))
+  })
+}
+
 const AGENT_SCANNERS = {
   claude: scanClaude,
   codex: scanCodex,
@@ -605,4 +647,63 @@ export function apply(ctx) {
       }),
     'dsh-advancesearch: GET ' + ROUTE,
   )
+
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: ROUTE + '/action',
+        handler: async (req, res) => {
+          if (rejected(req, res)) return
+          if (req.method !== 'POST') {
+            res.statusCode = 405
+            res.setHeader('allow', 'POST')
+            res.end()
+            return
+          }
+          let body
+          try {
+            body = JSON.parse(await readBoundedBody(req, 2048))
+          } catch {
+            sendError(res, 400, 'bad-request', '请求体必须是 JSON')
+            return
+          }
+          try {
+            switch (body.action) {
+              case 'open-app': {
+                if (!AGENT_IDS.includes(body.agent)) throw new Error('未知 agent')
+                await openAgentApp(body.agent)
+                break
+              }
+              case 'reveal': {
+                await revealInFinder(body.path)
+                break
+              }
+              default:
+                sendError(res, 400, 'unknown-action', '不支持的动作')
+                return
+            }
+            sendJson(res, 200, { ok: true })
+          } catch (error) {
+            sendError(res, 400, 'action-failed', error instanceof Error ? error.message : String(error))
+          }
+        },
+      }),
+    'dsh-advancesearch: POST ' + ROUTE + '/action',
+  )
+}
+
+/** 读取有界 JSON 请求体。 */
+async function readBoundedBody(req, maxBytes) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > maxBytes) {
+      req.resume()
+      throw new Error('body too large')
+    }
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks).toString('utf8')
 }
