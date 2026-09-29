@@ -11,8 +11,18 @@
  * openAt "never"(桌面组合默认如此)时,自动回退到官方语义扫描接口
  * listSessions + filterEvents(字面、大小写不敏感、空白灵活匹配)。
  *
+ * 另支持搜索本机外部 coding agent 的会话日志(?agents=claude,codex,zcode):
+ *   claude → ~/.claude/projects/ 下的各 .jsonl 会话日志
+ *   codex  → ~/.codex/sessions/ 下的 rollout-*.jsonl 日志
+ *   zcode  → ~/.zcode/cli/db/db.sqlite(session/part 表)
+ *
  * 认证与 dsh-host-open-in-app 同一机制:`ctx.connection.requestRejection(req)`。
  */
+
+import { homedir } from 'node:os'
+import { readdir, readFile, stat } from 'node:fs/promises'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 
 export const name = 'dsh-advancesearch'
 export const inject = ['webServer', 'connection', 'sessionQuery']
@@ -77,6 +87,256 @@ function snippetAround(text, matcher, chars = SNIPPET_CHARS) {
   const prefix = start > 0 ? '…' : ''
   const end = Math.min(clean.length, start + chars)
   return `${prefix}${clean.slice(start, end)}${end < clean.length ? '…' : ''}`
+}
+
+
+// ---------------------------------------------------------------------------
+// 外部 coding agent 会话扫描(claude / codex / zcode)
+// ---------------------------------------------------------------------------
+
+const AGENT_IDS = ['claude', 'codex', 'zcode']
+const MAX_FILE_BYTES = 32 * 1024 * 1024
+const MAX_MATCHES_PER_FILE = 2
+const MAX_RESULTS_PER_AGENT = 10
+
+function jsonLinesOf(text) {
+  const out = []
+  for (const line of text.split('\n')) {
+    if (!line || line.charCodeAt(0) > 0xffff) continue
+    try {
+      out.push(JSON.parse(line))
+    } catch {}
+  }
+  return out
+}
+
+/** 从任意 JSON 值里收集文本片段(仅取已知文本字段,避免把 JSON 语法字符当内容)。 */
+function* textsOf(value) {
+  if (typeof value === 'string') {
+    yield value
+    return
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) yield* textsOf(item)
+    return
+  }
+  if (value !== null && typeof value === 'object') {
+    if (typeof value.text === 'string') yield value.text
+    if (typeof value.message === 'string') yield value.message
+    if (typeof value.summary === 'string') yield value.summary
+    if (typeof value.thinking === 'string') yield value.thinking
+    if (value.content !== undefined) yield* textsOf(value.content)
+  }
+}
+
+function firstUserText(lines) {
+  for (const line of lines) {
+    const role = line?.message?.role ?? line?.payload?.role
+    if (role !== 'user') continue
+    for (const text of textsOf(line.message?.content ?? line.payload?.content ?? line.payload)) {
+      const clean = text.replace(/\s+/gu, ' ').trim()
+      if (clean.length >= 4 && !clean.startsWith('<')) return clean
+    }
+  }
+  return null
+}
+
+function collectMatches(lines, matcher) {
+  const matches = []
+  for (const line of lines) {
+    for (const text of textsOf(line)) {
+      const snippet = snippetAround(text, matcher, SNIPPET_CHARS)
+      if (snippet) {
+        matches.push(snippet)
+        if (matches.length >= MAX_MATCHES_PER_FILE) return matches
+      }
+    }
+  }
+  return matches
+}
+
+/** 递归收集目录下的 .jsonl 文件(限深,忽略隐藏目录与超大文件)。 */
+async function jsonlFilesUnder(root, depth = 4) {
+  const files = []
+  async function walk(dir, level) {
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (level < depth && !entry.name.startsWith('.')) await walk(full, level + 1)
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        try {
+          if ((await stat(full)).size <= MAX_FILE_BYTES) files.push(full)
+        } catch {}
+      }
+    }
+  }
+  await walk(root, 0)
+  return files
+}
+
+/** 按修改时间新→旧排序。 */
+async function newestFirst(files) {
+  const withTime = await Promise.all(
+    files.map(async (path) => {
+      try {
+        return { path, time: (await stat(path)).mtimeMs }
+      } catch {
+        return { path, time: 0 }
+      }
+    }),
+  )
+  return withTime.sort((a, b) => b.time - a.time).map((entry) => entry.path)
+}
+
+async function scanClaude(query, matcher, limit) {
+  const root = join(homedir(), '.claude', 'projects')
+  const files = await newestFirst(await jsonlFilesUnder(root))
+  const hits = []
+  for (const path of files) {
+    if (hits.length >= limit) break
+    try {
+      const lines = jsonLinesOf(await readFile(path, 'utf8'))
+      const matches = collectMatches(lines, matcher)
+      if (matches.length === 0) continue
+      const summary = lines.find((line) => typeof line?.summary === 'string')
+      const title =
+        firstUserText(lines) ??
+        (summary ? summary.summary.slice(0, 60) : null) ??
+        path.split('/').at(-1).replace(/\.jsonl$/, '')
+      hits.push({
+        agent: 'claude',
+        id: path.replace(/\.jsonl$/, '').split('/').pop(),
+        title,
+        time: (await stat(path)).mtimeMs,
+        path,
+        matches,
+      })
+    } catch {}
+  }
+  return hits
+}
+
+async function scanCodex(query, matcher, limit) {
+  const root = join(homedir(), '.codex', 'sessions')
+  const files = await newestFirst(await jsonlFilesUnder(root))
+  const hits = []
+  for (const path of files) {
+    if (hits.length >= limit) break
+    try {
+      const lines = jsonLinesOf(await readFile(path, 'utf8'))
+      const matches = collectMatches(lines, matcher)
+      if (matches.length === 0) continue
+      const meta = lines.find((line) => line?.type === 'session_meta')?.payload
+      hits.push({
+        agent: 'codex',
+        id: meta?.id ?? path.split('/').pop().replace(/\.jsonl$/, '').replace(/^rollout-[^-]+-/, ''),
+        title: firstUserText(lines) ?? meta?.cwd?.split('/').pop() ?? path.split('/').pop(),
+        time: (await stat(path)).mtimeMs,
+        path,
+        matches,
+      })
+    } catch {}
+  }
+  return hits
+}
+
+function zcodeDb() {
+  try {
+    return new DatabaseSync(join(homedir(), '.zcode', 'cli', 'db', 'db.sqlite'), { readOnly: true })
+  } catch {
+    return null
+  }
+}
+
+async function scanZcode(query, matcher, limit) {
+  const db = zcodeDb()
+  if (!db) return []
+  try {
+    const like = `%${query.replace(/[%_]/g, (ch) => `\\${ch}`)}%`
+    const titleRows = db
+      .prepare(
+        "SELECT id, title, directory, time_updated FROM session WHERE title LIKE ? ESCAPE '\\' ORDER BY time_updated DESC LIMIT ?",
+      )
+      .all(like, limit)
+    const hits = new Map()
+    for (const row of titleRows) {
+      hits.set(row.id, {
+        agent: 'zcode',
+        id: row.id,
+        title: row.title,
+        time: row.time_updated,
+        path: row.directory,
+        matches: [],
+        titleMatch: true,
+      })
+    }
+    // 内容搜索:SQL LIKE 预筛 part 文本,再按语义匹配验证
+    const contentRows = db
+      .prepare(
+        "SELECT p.session_id, p.data, s.title, s.directory, s.time_updated FROM part p JOIN session s ON s.id = p.session_id WHERE p.data LIKE ? ESCAPE '\\' ORDER BY s.time_updated DESC LIMIT 4000",
+      )
+      .all(like)
+    for (const row of contentRows) {
+      if (hits.has(row.session_id) && hits.get(row.session_id).matches.length >= MAX_MATCHES_PER_FILE) continue
+      let text = null
+      try {
+        const part = JSON.parse(row.data)
+        if (part.type === 'text' && typeof part.text === 'string') text = part.text
+        else if (typeof part.thinking === 'string') text = part.thinking
+      } catch {}
+      if (!text) continue
+      const snippet = snippetAround(text, matcher)
+      if (!snippet) continue
+      const existing = hits.get(row.session_id)
+      if (existing) {
+        existing.matches.push(snippet)
+      } else {
+        hits.set(row.session_id, {
+          agent: 'zcode',
+          id: row.session_id,
+          title: row.title,
+          time: row.time_updated,
+          path: row.directory,
+          matches: [snippet],
+        })
+        if (hits.size >= limit) break
+      }
+    }
+    return [...hits.values()].slice(0, limit)
+  } finally {
+    db.close()
+  }
+}
+
+// 供测试与复用导出
+export { makeTextMatcher, scanClaude, scanCodex, scanZcode }
+
+const AGENT_SCANNERS = {
+  claude: scanClaude,
+  codex: scanCodex,
+  zcode: scanZcode,
+}
+
+/** 扫描选中的外部 agent,串行执行避免 I/O 风暴。 */
+async function searchExternalAgents(agents, query, matcher, limit) {
+  const external = []
+  for (const agent of agents) {
+    const scan = AGENT_SCANNERS[agent]
+    if (!scan) continue
+    try {
+      const hits = await scan(query, matcher, limit)
+      external.push(...hits)
+    } catch (error) {
+      console.warn(`[dsh-advancesearch] 扫描 ${agent} 会话失败:`, error?.message ?? error)
+    }
+  }
+  return external.sort((a, b) => (b.time ?? 0) - (a.time ?? 0))
 }
 
 export function apply(ctx) {
@@ -235,6 +495,10 @@ export function apply(ctx) {
           const query = (url.searchParams.get('q') ?? '').trim()
           const sessionId = (url.searchParams.get('sessionId') ?? '').trim()
           const limit = clampLimit(url.searchParams.get('limit') ?? '')
+          const agents = (url.searchParams.get('agents') ?? '')
+            .split(',')
+            .map((value) => value.trim())
+            .filter((value) => AGENT_IDS.includes(value))
           if (!query) {
             sendError(res, 400, 'empty-query', '缺少查询关键字:使用 ?q=<关键字>')
             return
@@ -244,6 +508,7 @@ export function apply(ctx) {
               sendJson(res, 200, await searchInSession(query, sessionId, limit))
               return
             }
+            const matcher = makeTextMatcher(query)
             let sessions
             let engine = 'scan'
             try {
@@ -253,7 +518,19 @@ export function apply(ctx) {
               if (String(error?.code ?? '') !== 'SESSION_QUERY_SEARCH_DISABLED') throw error
               sessions = await searchSessionsScan(query, limit)
             }
-            sendJson(res, 200, { ok: true, mode: 'sessions', query, engine, sessions, nextCursor: null })
+            let external = []
+            if (agents.length > 0) {
+              external = await searchExternalAgents(agents, query, matcher, limit)
+            }
+            sendJson(res, 200, {
+              ok: true,
+              mode: 'sessions',
+              query,
+              engine,
+              sessions,
+              external,
+              nextCursor: null,
+            })
           } catch (error) {
             sendError(res, statusOf(error), String(error?.code ?? 'search-failed'), messageOf(error))
           }

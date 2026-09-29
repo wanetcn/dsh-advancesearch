@@ -28,12 +28,34 @@ window.__ModuleLoader__.load({
 			};
 		}
 
+		/** 可选的外部 agent 会话源;勾选状态持久化,下次打开保持。 */
+		const AGENT_OPTIONS = [
+			{ id: "claude", label: "Claude" },
+			{ id: "codex", label: "Codex" },
+			{ id: "zcode", label: "ZCode" },
+		];
+		const AGENTS_STORE_KEY = "advancesearch.agents";
+		function loadSelectedAgents() {
+			try {
+				const saved = JSON.parse(window.localStorage.getItem(AGENTS_STORE_KEY) ?? "[]");
+				return Array.isArray(saved) ? saved.filter((id) => AGENT_OPTIONS.some((option) => option.id === id)) : [];
+			} catch {
+				return [];
+			}
+		}
+		function saveSelectedAgents(ids) {
+			try {
+				window.localStorage.setItem(AGENTS_STORE_KEY, JSON.stringify(ids));
+			} catch {}
+		}
+
 		/** GET /api/dsh-advancesearch —— Host 侧本插件提供的已认证路由。 */
 		async function runSearch(params) {
 			const url = new URL("/api/dsh-advancesearch", window.location.origin);
 			url.searchParams.set("q", params.query);
 			url.searchParams.set("limit", String(params.limit ?? 20));
 			if (params.sessionId) url.searchParams.set("sessionId", params.sessionId);
+			if (params.agents && params.agents.length > 0) url.searchParams.set("agents", params.agents.join(","));
 			const response = await fetch(url, { credentials: "same-origin" });
 			const payload = await response.json().catch(() => null);
 			if (!response.ok || !payload || payload.ok !== true) {
@@ -241,6 +263,60 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		const AGENT_BADGE_COLORS = {
+			claude: "#d97757",
+			codex: "#10a37f",
+			zcode: "#4f6ef7",
+		};
+		function AgentBadge(props) {
+			const { agent } = props;
+			return e(
+				"span",
+				{
+					style: {
+						fontSize: 10,
+						padding: "1px 6px",
+						borderRadius: 4,
+						color: "#fff",
+						background: AGENT_BADGE_COLORS[agent] ?? "#888",
+						whiteSpace: "nowrap",
+					},
+				},
+				(AGENT_OPTIONS.find((option) => option.id === agent) ?? { label: agent }).label,
+			);
+		}
+
+		/** 外部 agent 会话命中行:标题 + 片段(可能多条)+ 来源路径;不可跳转,仅展示。 */
+		function ExternalHit(props) {
+			const { item, query } = props;
+			return e(
+				"div",
+				{ style: { borderBottom: "1px solid rgba(127,127,127,0.18)", padding: "10px 4px" } },
+				e(
+					"div",
+					{ style: { display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" } },
+					e(
+						"span",
+						{ style: { display: "flex", gap: 6, alignItems: "center", minWidth: 0 } },
+						e(AgentBadge, { agent: item.agent }),
+						e("span", { style: { fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, item.title || "(无标题会话)"),
+					),
+					e("span", { style: { fontSize: 11, opacity: 0.55, whiteSpace: "nowrap" } }, formatTime(item.time)),
+				),
+				...(item.matches ?? []).map((snippet, index) =>
+					e("div", { key: index, style: { fontSize: 12, opacity: 0.8, marginTop: 4 } }, highlight(snippet, query)),
+				),
+				item.titleMatch && (item.matches ?? []).length === 0
+					? e("div", { style: { fontSize: 12, opacity: 0.6, marginTop: 4 } }, "(标题命中)")
+					: null,
+				e(
+					"div",
+					{ style: { fontSize: 10, opacity: 0.45, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left" } },
+					item.path ?? "",
+				),
+			);
+		}
+
 		/** 结果行右键菜单:跳转到会话。 */
 		function JumpMenu(props) {
 			const { menu, onClose, onJump } = props;
@@ -301,6 +377,17 @@ window.__ModuleLoader__.load({
 			const onJump = props && props.onJump;
 			const open = react.useSyncExternalStore(subscribeOpen, () => openState.open);
 			const [menu, setMenu] = react.useState(null);
+			const [selectedAgents, setSelectedAgents] = react.useState(loadSelectedAgents);
+			react.useEffect(() => {
+				if (open) setSelectedAgents(loadSelectedAgents());
+			}, [open]);
+			const toggleAgent = (id) => {
+				setSelectedAgents((previous) => {
+					const next = previous.includes(id) ? previous.filter((value) => value !== id) : [...previous, id];
+					saveSelectedAgents(next);
+					return next;
+				});
+			};
 			const [query, setQuery] = react.useState("");
 			const [result, setResult] = react.useState(null);
 			const [loading, setLoading] = react.useState(false);
@@ -330,7 +417,7 @@ window.__ModuleLoader__.load({
 				setLoading(true);
 				setError(null);
 				try {
-					const payload = await runSearch({ query: trimmed, limit: 20 });
+					const payload = await runSearch({ query: trimmed, limit: 20, agents: selectedAgents });
 					setResult(payload);
 				} catch (cause) {
 					setResult(null);
@@ -434,12 +521,41 @@ window.__ModuleLoader__.load({
 					),
 					e(
 						"div",
+						{
+							style: {
+								display: "flex",
+								gap: 14,
+								alignItems: "center",
+								padding: "8px 14px",
+								borderBottom: "1px solid rgba(127,127,127,0.18)",
+								fontSize: 12,
+							},
+						},
+						e("span", { style: { opacity: 0.55 } }, "同时搜索:"),
+						AGENT_OPTIONS.map((option) =>
+							e(
+								"label",
+								{
+									key: option.id,
+									style: { display: "flex", gap: 4, alignItems: "center", cursor: "pointer", userSelect: "none" },
+								},
+								e("input", {
+									type: "checkbox",
+									checked: selectedAgents.includes(option.id),
+									onChange: () => toggleAgent(option.id),
+								}),
+								option.label,
+							),
+						),
+					),
+					e(
+						"div",
 						{ style: { overflowY: "auto", padding: "4px 12px 12px", flex: 1 } },
 						error !== null
 							? e("div", { style: { color: "#d33", fontSize: 13, padding: "12px 4px" } }, error)
 							: result === null
 								? e("div", { style: { fontSize: 13, opacity: 0.6, padding: "12px 4px" } }, "输入关键字后回车,按会话搜索全部历史(标题 + 内容)。")
-								: sessions.length === 0
+								: sessions.length === 0 && (result.external ?? []).length === 0
 									? e("div", { style: { fontSize: 13, opacity: 0.6, padding: "12px 4px" } }, `没有找到与「${result.query}」相关的会话。`)
 									: e(
 										"div",
@@ -455,7 +571,10 @@ window.__ModuleLoader__.load({
 										e(
 											"div",
 											{ style: { fontSize: 12, opacity: 0.55, padding: "8px 4px" } },
-											`共 ${sessions.length} 个会话命中「${result.query}」`,
+											`共 ${sessions.length} 个 DSH 会话` + ((result.external ?? []).length > 0 ? `、${result.external.length} 个外部 Agent 会话命中「${result.query}」` : `命中「${result.query}」`),
+										),
+										(result.external ?? []).map((item) =>
+											e(ExternalHit, { key: item.agent + ":" + item.id, item, query: result.query }),
 										),
 										sessions.map((item) =>
 											e(SessionHits, {

@@ -3,6 +3,7 @@
 DeepSeek Harness 插件:按关键字搜索**所有会话**的名称与会话内容,并在 Web 工作区界面提供搜索按钮。
 
 - **Host 侧**(`index.js`):通过 DSH 官方 `sessionQuery` 服务(`dsh-session-query-sqlite` 全文索引)暴露已认证的搜索路由 `GET /api/dsh-advancesearch`,与 `dsh-host-open-in-app` 使用同一 `connection.requestRejection` 信任围栏。
+- **外部 Agent 会话搜索**:勾选 Claude / Codex / ZCode 后,同时扫描本机 `~/.claude/projects`、`~/.codex/sessions`、`~/.zcode/cli/db` 的会话日志(标题 + 内容),勾选状态持久化保留;
 - **Client 侧**(`client.js`):以官方 `dsh.client` 浏览器插件格式(`window.__ModuleLoader__`)加载,在侧边栏底部(`sidebar.footer.action` 槽位)注册一个 🔍 按钮,点击弹出全局搜索层(`shell.overlay` 槽位):输入关键字 → 回车 → 列出所有命中会话(标题 + 最佳片段,关键字高亮)→ 点击某会话展开该会话内的逐条命中。
 
 ## 搜索能力
