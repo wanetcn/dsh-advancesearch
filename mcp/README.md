@@ -21,7 +21,10 @@
 
 ## 在 DeepSeek Harness 中使用
 
-`cordis.patch.yml` 加一段(dsh-base 组合自带 `dsh-mcp-client`):
+**方式一(推荐)**:直接安装 dsh-advancesearch 插件——其 bundle patch 会自动注册本 MCP 服务器,
+路径相对插件根动态解析,无需任何配置。
+
+**方式二(独立接入)**:手动在 `cordis.patch.yml` 加一段(dsh-base 组合自带 `dsh-mcp-client`):
 
 ```yaml
 - insert:

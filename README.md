@@ -15,6 +15,22 @@ DeepSeek Harness 插件:按关键字搜索**所有会话**的名称与会话内�
 
 标题取自 `readTitleSnapshots()`(官方标题折叠结果);搜索覆盖进行中的会话与已持久化会话。
 
+## Agent 工具(MCP)
+
+插件内置一个零依赖的 MCP stdio 服务器(`mcp/`),安装插件后**自动注册**,模型可直接调用:
+
+| 工具 | 功能 |
+|---|---|
+| `mcp__agent-session-search__search_agent_sessions` | 关键字搜索 Claude / Codex / ZCode 会话(标题+内容),返回标题、时间、片段、路径 |
+| `mcp__agent-session-search__read_agent_session` | 读取某个会话的最近消息全文 |
+| `mcp__agent-session-search__open_agent_app` | 唤起对应 agent 桌面应用 |
+| `mcp__agent-session-search__reveal_agent_session` | 在访达中显示会话记录文件 |
+
+MCP 服务器路径通过 `!!js` 相对插件根动态解析,无需写死路径;`command` 优先取
+`DSH_DESKTOP_NODE_EXECUTABLE` 环境变量,否则回落到 `node`。
+
+不装插件、只想在 Claude Desktop 等其他 MCP 客户端里用?见 [mcp/README.md](mcp/README.md) 的独立接入配置。
+
 ## 安装
 
 在 DSH profile 目录(如 `~/.dsh/profiles/web/`):

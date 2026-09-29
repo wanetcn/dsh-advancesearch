@@ -1,4 +1,14 @@
-# dsh-advancesearch 自身的组合层:插入 Host 侧搜索插件条目(浏览器侧由 dsh.client 声明自动加入)。
+# dsh-advancesearch 自身的组合层:
+#   1) Host 侧搜索插件(浏览器侧 UI 由 dsh.client 声明自动加载);
+#   2) agent-session-search MCP 服务器(路径用 !!js 相对插件根动态解析,随插件安装自动注册)。
 - insert:
     - id: advancesearch
       name: dsh-advancesearch
+    - id: mcp-agent-session-search
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: agent-session-search
+        transport: stdio
+        command: !!js process.env.DSH_DESKTOP_NODE_EXECUTABLE || 'node'
+        args:
+          - !!js decodeURIComponent(new URL('mcp/mcp-agent-session-search.js', ctx.baseUrl).pathname)
