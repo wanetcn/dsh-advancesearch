@@ -1,0 +1,4 @@
+# dsh-advancesearch 自身的组合层:插入 Host 侧搜索插件条目(浏览器侧由 dsh.client 声明自动加入)。
+- insert:
+    - id: advancesearch
+      name: dsh-advancesearch

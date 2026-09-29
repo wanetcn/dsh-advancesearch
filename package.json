@@ -1,0 +1,24 @@
+{
+  "name": "dsh-advancesearch",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 高级搜索插件:按关键字搜索所有会话的名称与会话内容,并在 Web 工作区界面提供搜索按钮与结果弹层。",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "private": true,
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4"
+  }
+}
