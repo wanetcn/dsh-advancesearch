@@ -1,6 +1,7 @@
 # dsh-advancesearch 自身的组合层:
 #   1) Host 侧搜索插件(浏览器侧 UI 由 dsh.client 声明自动加载);
-#   2) agent-session-search MCP 服务器(路径用 !!js 相对插件根动态解析,随插件安装自动注册)。
+#   2) agent-session-search MCP 服务器(command 取宿主自身二进制 + ELECTRON_RUN_AS_NODE,
+#      路径用 !!js 相对插件根动态解析,随插件安装自动注册)。
 - insert:
     - id: advancesearch
       name: dsh-advancesearch
@@ -9,6 +10,8 @@
       config:
         serverName: agent-session-search
         transport: stdio
-        command: !!js process.env.DSH_DESKTOP_NODE_EXECUTABLE || 'node'
+        command: !!js process.execPath
+        env:
+          ELECTRON_RUN_AS_NODE: '1'
         args:
           - !!js (function(){var p=[];try{var I=ctx.loader&&ctx.loader.internal;if(I){var r=I.version==='v2'?I.resolveSync(ctx.baseUrl,{specifier:'dsh-advancesearch/package.json',attributes:{}}):I.resolveSync('dsh-advancesearch/package.json',ctx.baseUrl,{});if(r&&r.url)p.push(r.url)}}catch(e){}p.push(ctx.baseUrl);p.push(new URL('node_modules/dsh-advancesearch/package.json',ctx.baseUrl).href);for(var i=0;i<p.length;i++){try{return decodeURIComponent(new URL('mcp/mcp-agent-session-search.js',p[i]).pathname)}catch(e){}}return 'mcp/mcp-agent-session-search.js'})()
