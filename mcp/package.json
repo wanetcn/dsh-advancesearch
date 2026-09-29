@@ -1,0 +1,9 @@
+{
+  "name": "agent-session-search-mcp",
+  "version": "0.1.0",
+  "description": "MCP stdio 服务器:让 agent 按关键字搜索本机 Claude Code / Codex / ZCode 的会话记录(标题+内容),零依赖。",
+  "type": "module",
+  "bin": { "agent-session-search-mcp": "./mcp-agent-session-search.js" },
+  "engines": { "node": ">=22.5" },
+  "license": "MIT"
+}
